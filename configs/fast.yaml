@@ -2,7 +2,7 @@
 #   --config configs/default.yaml --config configs/fast.yaml
 data:
   sft_num_samples: 10000
-  probe_pool_size: 384
+  probe_pool_size: 512
 eval:
   n: 8
   ks: [1, 2, 4, 8]

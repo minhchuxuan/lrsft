@@ -22,24 +22,26 @@ from .common import (
     load_model,
     load_tokenizer,
     parse_layers,
-    save_bf16,
+    save_snapshot,
     set_seed,
+    snapshot_dtype,
     write_json,
 )
 from .config import Paths, add_config_args, config_from_args
 
 
 class EpochSnapshots(TrainerCallback):
-    def __init__(self, epochs, out_dir_fn, tokenizer):
+    def __init__(self, epochs, out_dir_fn, tokenizer, dtype):
         self.epochs = set(epochs)
         self.out_dir_fn = out_dir_fn
         self.tokenizer = tokenizer
+        self.dtype = dtype
 
     def on_epoch_end(self, args, state, control, model=None, **kw):
         epoch = int(round(state.epoch))
         out = self.out_dir_fn(epoch)
         if epoch in self.epochs and not is_model_dir(out) and state.is_world_process_zero:
-            save_bf16(model, self.tokenizer, out)
+            save_snapshot(model, self.tokenizer, out, self.dtype)
             print(f"sft: saved {out}")
 
 
@@ -98,7 +100,8 @@ def build_trainer(cfg, paths: Paths, mode: str, layers, model=None, train_datase
         dataloader_num_workers=2 if torch.cuda.is_available() else 0,
     )
     trainer = SFTTrainer(model=model, args=args, train_dataset=train_dataset, processing_class=tok)
-    trainer.add_callback(EpochSnapshots(s.save_epochs, lambda e: paths.ckpt(f"{mode}_ep{e}"), tok))
+    snapshots = EpochSnapshots(s.save_epochs, lambda e: paths.ckpt(f"{mode}_ep{e}"), tok, snapshot_dtype(cfg))
+    trainer.add_callback(snapshots)
     trainer.add_callback(JsonlLog(paths.results / "sft" / f"{name}_log.jsonl"))
     return trainer
 
@@ -137,7 +140,7 @@ def main():
     # A resumed run may have skipped an epoch end that was already saved; make sure the last one exists.
     last = paths.ckpt(f"{args.mode}_ep{max(cfg.sft.save_epochs)}")
     if not is_model_dir(last):
-        save_bf16(trainer.model, trainer.processing_class, last)
+        save_snapshot(trainer.model, trainer.processing_class, last, snapshot_dtype(cfg))
     missing = [str(t) for t in targets if not is_model_dir(t)]
     if missing:
         raise RuntimeError(f"missing epoch snapshots: {missing} (resumed past them? rerun with a fresh run dir)")

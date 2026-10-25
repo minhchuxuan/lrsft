@@ -74,7 +74,7 @@ def autocast_ctx(device, bf16: bool):
     return torch.autocast(device_type=device.type, dtype=torch.bfloat16) if bf16 else nullcontext()
 
 
-def group_backward(model, group, pad_id, device, micro_bs, bf16, scale="group", mask_truncated=True):
+def group_backward(model, group, pad_id, device, micro_bs, bf16, scale="group", mask_truncated=True, chunk=1024):
     """Backward of one prompt group's GRPO loss at ratio = 1 (on-policy), token-mean over the group:
 
         L = - sum_i A_i sum_t log pi(o_i,t) / sum_i |o_i|
@@ -92,7 +92,7 @@ def group_backward(model, group, pad_id, device, micro_bs, bf16, scale="group", 
         seqs = [(group["prompt_ids"], group["completion_ids"][i]) for i in idx]
         ids, attn, comp = pad_batch(seqs, pad_id, device)
         with autocast_ctx(device, bf16):
-            logp, ent, rows = token_logprobs(model, ids, attn, comp)
+            logp, ent, rows = token_logprobs(model, ids, attn, comp, chunk=chunk)
         a = torch.tensor(adv[idx], dtype=torch.float32, device=device)[rows]
         loss = -(a * logp).sum() / n_tok
         loss.backward()
@@ -109,7 +109,8 @@ def layer_params(model) -> dict[int, list]:
     return dict(sorted(out.items()))
 
 
-def batch_layer_stats(model, groups, pad_id, device, micro_bs=4, bf16=True, scale="group", mask_truncated=True):
+def batch_layer_stats(model, groups, pad_id, device, micro_bs=4, bf16=True, scale="group", mask_truncated=True,
+                      acc_device=None, chunk=1024):
     """Per-layer statistics of the GRPO gradient over a batch of prompt groups.
 
     g_j = gradient of group j's loss; g = mean_j g_j (the batch gradient GRPO would follow).
@@ -121,13 +122,14 @@ def batch_layer_stats(model, groups, pad_id, device, micro_bs=4, bf16=True, scal
     """
     lp = layer_params(model)
     params = [p for ps in lp.values() for p in ps]
-    acc = [torch.zeros_like(p, dtype=torch.float32) for p in params]
+    # acc_device="cpu" keeps the running gradient sum off a small GPU (one D2H copy per group)
+    acc = [torch.zeros_like(p, dtype=torch.float32, device=acc_device or p.device) for p in params]
     sq = []
     tokens, ent = 0, 0.0
     used = 0
     for group in groups:
         model.zero_grad(set_to_none=True)
-        n_tok, e = group_backward(model, group, pad_id, device, micro_bs, bf16, scale, mask_truncated)
+        n_tok, e = group_backward(model, group, pad_id, device, micro_bs, bf16, scale, mask_truncated, chunk)
         if n_tok == 0:
             continue
         used += 1
@@ -139,7 +141,7 @@ def batch_layer_stats(model, groups, pad_id, device, micro_bs=4, bf16=True, scal
         sq.append(row)
         for a, p in zip(acc, params):
             if p.grad is not None:
-                a.add_(p.grad.float())
+                a.add_(p.grad.float().to(a.device))
     model.zero_grad(set_to_none=True)
     if used == 0:
         raise RuntimeError("no group with non-zero advantage and untruncated completions")

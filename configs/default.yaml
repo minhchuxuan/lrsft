@@ -24,7 +24,8 @@ data:
   rl_source: math              # math (MATH train) | dapo (DAPO-Math-17k, harder for 0.6B)
   rl_levels: [3, 4, 5]
   rl_num_prompts: null
-  probe_pool_size: 512         # fixed RL prompts used by every layer probe / dead-group measurement
+  probe_levels: [1, 2, 3, 4, 5] # probe pool: all MATH levels (theta_0 solves few level 3-5 problems)
+  probe_pool_size: 768         # fixed prompts used by every layer probe / dead-group measurement
   eval_source: HuggingFaceH4/MATH-500
   synthetic: null
 
@@ -38,6 +39,8 @@ probe:                         # A1 / A3 layer ranking
   batch_prompts: 64            # informative prompt groups per batch
   num_batches: 3               # independent batches -> error bars / rank stability
   micro_batch_size: 4
+  lm_head_chunk: 1024          # tokens per LM-head chunk (fp32 logits: chunk x 152k x 4 bytes)
+  acc_device: null             # "cpu" keeps the gradient sum off small GPUs
 
 select:
   k: 2

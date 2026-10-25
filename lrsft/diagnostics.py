@@ -62,8 +62,7 @@ def mean_entropy(model, rows, tok, dev, bf16, limit):
     return tot / max(n, 1), n
 
 
-def weight_stats(model, base):
-    base_sd = {k: v for k, v in base.state_dict().items()}
+def weight_stats(model, base_sd):
     per = {}
     for name, p in model.state_dict().items():
         layer = layer_of(name)
@@ -96,23 +95,28 @@ def main():
     bf16 = dev.type == "cuda" and cfg.train.bf16
     tok = load_tokenizer(paths.ckpt(args.ckpt))
     kw = dict(dtype=torch.float32, attn_implementation=cfg.model.attn_implementation, device_=dev)
-    model = load_model(paths.ckpt(args.ckpt), **kw).eval()
-    base = load_model(paths.ckpt("base"), **kw).eval()
-
-    eval_rows = read_jsonl(paths.rollouts(args.ckpt, "eval"))
-    ent, n_ent = mean_entropy(model, eval_rows, tok, dev, bf16, cfg.eval.entropy_samples)
 
     # Fixed probe text for CKA: the same sequences and token positions for every checkpoint.
     m500 = read_jsonl(paths.data / "math500.jsonl")[: cfg.eval.cka_samples]
     seqs = [tok(text=r["prompt"] + r["solution"] + END_OF_TURN)["input_ids"] for r in m500]
     all_idx = [(s, p) for s, ids in enumerate(seqs) for p in range(len(ids))]
     token_idx = sorted(random.Random(cfg.seed).sample(all_idx, min(cfg.eval.cka_tokens, len(all_idx))))
-    feats = layer_inputs(model, seqs, dev, bf16, token_idx)
+
+    # One model on the GPU at a time (fits small debug GPUs); the base weights wait on the CPU.
+    base = load_model(paths.ckpt("base"), **kw).eval()
     feats0 = layer_inputs(base, seqs, dev, bf16, token_idx)
+    base_sd = {k: v.detach().cpu() for k, v in base.state_dict().items()}
+    del base
+    if dev.type == "cuda":
+        torch.cuda.empty_cache()
+    model = load_model(paths.ckpt(args.ckpt), **kw).eval()
+    feats = layer_inputs(model, seqs, dev, bf16, token_idx)
     cka = [linear_cka(a, b) for a, b in zip(feats, feats0)]
+    eval_rows = read_jsonl(paths.rollouts(args.ckpt, "eval"))
+    ent, n_ent = mean_entropy(model, eval_rows, tok, dev, bf16, cfg.eval.entropy_samples)
 
     write_json(out, {"ckpt": args.ckpt, "entropy": ent, "entropy_tokens": n_ent, "cka_input_vs_base": cka,
-                     "cka_tokens": len(token_idx), **weight_stats(model, base)})
+                     "cka_tokens": len(token_idx), **weight_stats(model, base_sd)})
     print(f"diag {args.ckpt}: entropy={ent:.3f} cka(min)={min(cka):.3f}")
 
 

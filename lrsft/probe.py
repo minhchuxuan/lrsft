@@ -60,12 +60,15 @@ def main():
     informative = [r for r in rows if len(set(r["rewards"])) > 1
                    and not (cfg.rl.mask_truncated and all(r["truncated"]))]
     random.Random(cfg.seed).shuffle(informative)
-    bp, nb = cfg.probe.batch_prompts, cfg.probe.num_batches
-    n_batches = min(nb, len(informative) // bp)
+    bp, n_batches = cfg.probe.batch_prompts, cfg.probe.num_batches
     note = None
-    if n_batches == 0:
-        n_batches, bp = 1, len(informative)
-        note = f"only {len(informative)} informative prompts; one batch of all of them"
+    if len(informative) < bp * n_batches:
+        # Too few informative groups: keep the number of batches (error bars), shrink each batch.
+        bp = len(informative) // n_batches
+        note = f"only {len(informative)} informative prompts; batches of {bp}"
+        if bp < 8:
+            n_batches, bp = 1, len(informative)
+            note = f"only {len(informative)} informative prompts; one batch of all of them"
     batches = [informative[i * bp : (i + 1) * bp] for i in range(n_batches)]
 
     dev = device()
@@ -82,7 +85,9 @@ def main():
     t0 = time.time()
     for b, groups in enumerate(batches):
         stats = batch_layer_stats(model, groups, tok.pad_token_id, dev, cfg.probe.micro_batch_size, bf16,
-                                  scale=cfg.rl.scale_rewards, mask_truncated=cfg.rl.mask_truncated)
+                                  scale=cfg.rl.scale_rewards, mask_truncated=cfg.rl.mask_truncated,
+                                  acc_device=cfg.probe.get("acc_device"),
+                                  chunk=cfg.probe.get("lm_head_chunk", 1024))
         per_batch.append(stats)
         print(f"probe {args.ckpt} batch {b + 1}/{len(batches)}: top-{cfg.select.k} grad_norm "
               f"{top_k(stats['grad_norm'], cfg.select.k)} ({time.time() - t0:.0f}s)")

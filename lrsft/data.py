@@ -4,7 +4,7 @@ Outputs
   models/base/              bf16 Qwen3 base with eos = [<|endoftext|>, <|im_end|>] (or a tiny random Qwen3)
   data/sft/                 tokenized SFT set (input_ids, completion_mask), saved with datasets.save_to_disk
   data/rl_train.jsonl       RL prompts  {problem, prompt, answer, level}
-  data/probe_pool.jsonl     fixed subset of the RL prompts, used by every layer probe
+  data/probe_pool.jsonl     fixed MATH-train prompts (all levels by default), used by every layer probe
   data/math500.jsonl        eval set    {problem, prompt, answer, level, solution}
   results/data_stats.json
 """
@@ -21,6 +21,7 @@ from .common import (
     is_model_dir,
     load_tokenizer,
     patch_generation_config,
+    snapshot_dtype,
     write_json,
     write_jsonl,
 )
@@ -62,9 +63,9 @@ def prepare_base(cfg, paths: Paths) -> None:
             pad_token_id=tok.pad_token_id,
         )
         torch.manual_seed(cfg.seed)
-        model = Qwen3ForCausalLM(config).to(torch.bfloat16)
+        model = Qwen3ForCausalLM(config).to(snapshot_dtype(cfg))
     else:
-        model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=torch.bfloat16)
+        model = AutoModelForCausalLM.from_pretrained(cfg.model.name, dtype=snapshot_dtype(cfg))
     assert model.config.tie_word_embeddings, "the code assumes tied embeddings (Qwen3-0.6B)"
     patch_generation_config(model, tok)
     tmp = out.with_name("base.tmp")
@@ -88,25 +89,38 @@ def load_math500(cfg):
     ]
 
 
-def load_rl_prompts(cfg, exclude: set):
+def load_math_train(exclude: set):
     from datasets import load_dataset
 
     rows = []
+    for r in load_dataset("DigitalLearningGmbH/MATH-lighteval", "default", split="train"):
+        lv = r["level"].split()[-1]
+        ans = last_boxed(r["solution"])
+        if ans and lv.isdigit() and norm_problem(r["problem"]) not in exclude:
+            rows.append({"problem": r["problem"], "answer": ans, "level": int(lv)})
+    return rows
+
+
+def load_rl_and_probe_prompts(cfg, exclude: set):
+    """RL prompts (MATH train levels rl_levels, or DAPO-Math) and the candidates for the probe pool.
+
+    The probe pool spans more levels than RL by default: at theta_0 the 0.6B base solves few level 3-5
+    problems, and the probe only uses prompt groups with mixed rewards.
+    """
+    math_rows = load_math_train(exclude)
+    probe_levels = set(cfg.data.get("probe_levels") or cfg.data.rl_levels)
+    probe_rows = [r for r in math_rows if r["level"] in probe_levels]
     if cfg.data.rl_source == "math":
-        ds = load_dataset("DigitalLearningGmbH/MATH-lighteval", "default", split="train")
-        levels = {f"Level {lv}" for lv in cfg.data.rl_levels}
-        for r in ds:
-            if r["level"] not in levels:
-                continue
-            ans = last_boxed(r["solution"])
-            if ans:
-                rows.append({"problem": r["problem"], "answer": ans, "level": int(r["level"].split()[-1])})
+        rl_rows = [r for r in math_rows if r["level"] in set(cfg.data.rl_levels)]
     elif cfg.data.rl_source == "dapo":
+        from datasets import load_dataset
+
         ds = load_dataset("open-r1/DAPO-Math-17k-Processed", "en", split="train")
-        rows = [{"problem": r["prompt"], "answer": r["solution"], "level": -1} for r in ds]
+        rl_rows = [{"problem": r["prompt"], "answer": r["solution"], "level": -1} for r in ds
+                   if norm_problem(r["prompt"]) not in exclude]
     else:
         raise ValueError(cfg.data.rl_source)
-    return [r for r in rows if norm_problem(r["problem"]) not in exclude]
+    return rl_rows, probe_rows
 
 
 def load_sft_rows(cfg, tok, exclude: set, stats: dict):
@@ -193,19 +207,20 @@ def main():
 
     if cfg.data.get("synthetic"):
         sft_rows, rl_rows, eval_rows = synthetic(cfg, tok)
+        probe_rows = list(rl_rows)
     else:
         eval_rows = load_math500(cfg)
         exclude = {norm_problem(r["problem"]) for r in eval_rows}
-        rl_rows = load_rl_prompts(cfg, exclude)
+        rl_rows, probe_rows = load_rl_and_probe_prompts(cfg, exclude)
         sft_rows = load_sft_rows(cfg, tok, exclude, stats)
 
-    for r in eval_rows + rl_rows:
+    for r in eval_rows + rl_rows + probe_rows:
         r["prompt"] = build_prompt(r["problem"])
-    rng = random.Random(cfg.seed)
-    rng.shuffle(rl_rows)
+    random.Random(cfg.seed).shuffle(rl_rows)
+    random.Random(cfg.seed + 1).shuffle(probe_rows)
     if cfg.data.get("rl_num_prompts"):
         rl_rows = rl_rows[: cfg.data.rl_num_prompts]
-    probe_pool = rl_rows[: cfg.data.probe_pool_size]
+    probe_pool = probe_rows[: cfg.data.probe_pool_size]
 
     from datasets import Dataset
 
@@ -218,6 +233,7 @@ def main():
         sft_tokens_max=int(max(lengths)),
         rl_prompts=len(rl_rows),
         probe_pool=len(probe_pool),
+        probe_pool_levels={str(lv): sum(r["level"] == lv for r in probe_pool) for lv in sorted({r["level"] for r in probe_pool})},
         eval_prompts=len(eval_rows),
     )
     paths.data.mkdir(parents=True, exist_ok=True)

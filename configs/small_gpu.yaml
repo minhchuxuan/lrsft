@@ -1,0 +1,53 @@
+# Debugging on a small pre-Ampere GPU (e.g. GTX 1660 SUPER, 6 GB, sm_75): no bf16, so snapshots
+# are fp16 and training runs in fp32. Sizes are cut so Qwen3-0.6B fits: probes and GRPO on R work,
+# full SFT with Adam (~10 GB) does not. Never use for results.
+#   CONFIGS="configs/default.yaml configs/small_gpu.yaml" ./run_all.sh --only prep,rollout_probe__base,...
+paths:
+  work: outputs_small
+  results: results_small
+  logs: logs_small
+model:
+  save_dtype: float16
+train:
+  bf16: false
+data:
+  sft_num_samples: 256
+  sft_max_tokens: 1024
+  probe_pool_size: 64
+gen:
+  gpu_memory_utilization: 0.8
+  score_workers: 4
+probe:
+  num_samples: 8
+  batch_prompts: 8
+  num_batches: 2
+  micro_batch_size: 2
+  acc_device: cpu          # running gradient sum on the CPU (fp32 model + grads already ~4 GB)
+  lm_head_chunk: 128       # fp32 logits per chunk: 128 x 152k x 4 B = 78 MB
+eval:
+  n: 4
+  ks: [1, 2, 4]
+  limit: 64
+  max_tokens: 1024
+  entropy_samples: 32
+  cka_samples: 16
+  cka_tokens: 1024
+rl:
+  depths: [1]
+  rounds: 3
+  prompts_per_round: 8
+  num_generations: 8
+  per_device_batch_size: 4
+  grad_accum: 8            # 64 rollouts / round, 32 per update -> 2 updates
+  max_completion_tokens: 512
+  vllm_gpu_memory_utilization: 0.3
+  save_every_rounds: 2
+sft:
+  save_epochs: [1]
+  per_device_batch_size: 2
+  grad_accum: 4
+extras:
+  random_R: false
+  reselected_R: false
+  full_param: false
+  rl_from_base: true       # GRPO on R straight from the base: the one RL run that fits without SFT

@@ -9,12 +9,17 @@ set -uo pipefail
 cd "$(dirname "$0")"
 
 export HF_HOME=${HF_HOME:-$PWD/.hf_cache}      # model + dataset cache
+# compile caches (vLLM / torch.compile, Triton kernels, Inductor, matplotlib) stay inside the repo
+export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$PWD/.cache}
+export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
+export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$XDG_CACHE_HOME/triton}
+export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$XDG_CACHE_HOME/inductor}
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 # export LRSFT_WORK=/big/disk/lrsft            # optional: put models/checkpoints/rollouts elsewhere (~45 GB)
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source "${VENV:-.venv}/bin/activate"
 mkdir -p logs
 LOG=logs/run_all_$(date +%Y%m%d_%H%M%S).log
 

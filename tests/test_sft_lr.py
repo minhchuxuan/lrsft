@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import torch
 
-from lrsft.common import layer_of, load_model, save_bf16
+from lrsft.common import layer_of, load_model, save_snapshot
 from lrsft.config import Paths, load_config
 
 REPO = Path(__file__).resolve().parent.parent
@@ -62,7 +62,7 @@ def test_lr_sft_keeps_reserved_layers_bit_identical(tiny_setup):
     assert report["reserved_bit_identical"] and report["other_tensors_changed"] > 0, report
 
 
-def test_save_bf16_keeps_tied_embeddings(tiny_setup, tmp_path):
+def test_save_snapshot_keeps_tied_embeddings(tiny_setup, tmp_path):
     cfg, paths, _ = tiny_setup
     model = load_model(paths.ckpt("base"), dtype=torch.float32)
     with torch.no_grad():
@@ -70,7 +70,7 @@ def test_save_bf16_keeps_tied_embeddings(tiny_setup, tmp_path):
     from transformers import AutoTokenizer
 
     tok = AutoTokenizer.from_pretrained(paths.ckpt("base"))
-    save_bf16(model, tok, tmp_path / "snap")
+    save_snapshot(model, tok, tmp_path / "snap")
     back = load_model(tmp_path / "snap", dtype=torch.bfloat16)
     assert back.config.dtype == torch.bfloat16
     assert back.lm_head.weight.data_ptr() == back.model.embed_tokens.weight.data_ptr()

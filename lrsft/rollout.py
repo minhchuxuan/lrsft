@@ -9,6 +9,7 @@
 
 import argparse
 import gc
+import os
 import time
 import zlib
 
@@ -21,16 +22,20 @@ from .reward import score_parallel
 
 
 def generate_vllm(model_dir, prompt_ids, n, temperature, top_p, max_tokens, seed, cfg, stops):
+    # The engine core runs in a child process; with "fork" it dies if CUDA was touched in this process
+    # first (seen on a Turing GPU). "spawn" is safe everywhere.
+    os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
     from vllm import LLM, SamplingParams
 
     max_prompt = max(len(p) for p in prompt_ids)
     llm = LLM(
         model=str(model_dir),
-        dtype="bfloat16",
+        dtype="auto",  # = the snapshot's config.dtype (bf16; fp16 on pre-Ampere debug GPUs)
         seed=seed,
         gpu_memory_utilization=cfg.gen.gpu_memory_utilization,
         max_model_len=max_prompt + max_tokens,
         enable_prefix_caching=True,
+        enforce_eager=bool(cfg.gen.get("enforce_eager", False)),
     )
     sp = SamplingParams(n=n, temperature=temperature, top_p=top_p, max_tokens=max_tokens, stop_token_ids=stops)
     outs = llm.generate([{"prompt_token_ids": p} for p in prompt_ids], sampling_params=sp, use_tqdm=True)

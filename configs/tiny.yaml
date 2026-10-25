@@ -6,7 +6,7 @@ paths:
   results: results_tiny
   logs: logs_tiny
 model:
-  tiny: {hidden_size: 64, intermediate_size: 128, num_layers: 4, num_heads: 4, num_kv_heads: 2}
+  tiny: {hidden_size: 128, intermediate_size: 256, num_layers: 4, num_heads: 2, num_kv_heads: 1}  # head_dim 64
 train:
   bf16: false
   use_cpu: true

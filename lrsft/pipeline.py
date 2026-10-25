@@ -11,6 +11,7 @@ Status: results/pipeline_status.json, logs: <logs>/<step>.log.
 """
 
 import argparse
+import fcntl
 import json
 import os
 import subprocess
@@ -167,6 +168,13 @@ def main():
         return
 
     paths.logs.mkdir(parents=True, exist_ok=True)
+    paths.results.mkdir(parents=True, exist_ok=True)
+    # One pipeline per results dir: a second run_all.sh would fight the first for the GPU.
+    lock = open(paths.results / ".pipeline.lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(f"another pipeline is already running on {paths.results} (lock held); not starting")
     status_path = paths.results / "pipeline_status.json"
     status = read_json(status_path) if status_path.exists() else {}
     t_all = time.time()

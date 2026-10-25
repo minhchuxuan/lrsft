@@ -167,7 +167,12 @@ def patch_generation_config(model_or_cfg, tokenizer) -> None:
     gen.pad_token_id = tokenizer.pad_token_id
 
 
-def save_bf16(model, tokenizer, out_dir) -> None:
+def snapshot_dtype(cfg) -> torch.dtype:
+    """bf16 everywhere except pre-Ampere debug GPUs (no bf16), where model.save_dtype=float16."""
+    return getattr(torch, cfg.model.get("save_dtype") or "bfloat16")
+
+
+def save_snapshot(model, tokenizer, out_dir, dtype=torch.bfloat16) -> None:
     """Save a bf16 copy (what vLLM and later stages load) without touching the training model.
 
     A fresh model is built from the config and filled with bf16 copies of the weights, so tied
@@ -181,10 +186,10 @@ def save_bf16(model, tokenizer, out_dir) -> None:
         import shutil
 
         shutil.rmtree(tmp)
-    sd = {k: v.detach().to("cpu", torch.bfloat16) for k, v in model.state_dict().items()}
+    sd = {k: v.detach().to("cpu", dtype) for k, v in model.state_dict().items()}
     config = model.config.__class__.from_dict(model.config.to_dict())
     config.use_cache = True
-    fresh = AutoModelForCausalLM.from_config(config, dtype=torch.bfloat16)
+    fresh = AutoModelForCausalLM.from_config(config, dtype=dtype)
     missing, unexpected = fresh.load_state_dict(sd, strict=False)
     missing = [k for k in missing if k != "lm_head.weight"]  # tied, restored by tie_weights()
     if missing or unexpected:

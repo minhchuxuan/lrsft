@@ -27,8 +27,9 @@ from .common import (
     parse_layers,
     patch_generation_config,
     read_jsonl,
-    save_bf16,
+    save_snapshot,
     set_seed,
+    snapshot_dtype,
     stop_token_ids,
     train_only_layers,
     write_json,
@@ -184,7 +185,7 @@ def main():
         p.detach().cpu(), frozen_ref[n])]
     if changed:
         raise RuntimeError(f"frozen parameters changed during RL: {changed[:5]}")
-    save_bf16(trainer.model, tok, final)
+    save_snapshot(trainer.model, tok, final, snapshot_dtype(cfg))
 
     hist = [h for h in trainer.state.log_history if "reward" in h]
     tail = hist[-max(1, len(hist) // 5):]
