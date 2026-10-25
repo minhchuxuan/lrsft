@@ -59,9 +59,10 @@ python plot.py --config configs/default.yaml    # tables + figures from whatever
   rl.depths=[8,1] eval.n=8`, or stack `configs/fast.yaml`. `select.override=[i,j]` forces R.
 - **Small debug GPU.** `configs/small_gpu.yaml` (fp16 snapshots, fp32 training, smaller sizes) is for
   a pre-Ampere card without bf16. On a 6 GB GTX 1660 SUPER the whole pipeline ran with the tiny model
-  (vLLM sampling, SFT, verify, GRPO colocate on R / random R / R′ / all params), and vLLM sampling
-  ran with the real Qwen3-0.6B. Full SFT of 0.6B with Adam does not fit there; never use that config
-  for results.
+  (vLLM sampling, SFT, verify, GRPO colocate on R / random R / R′ / all params), and with the real
+  Qwen3-0.6B: vLLM sampling, the layer probe, diagnostics and one GRPO-on-R round with vLLM
+  colocated (5.2 GB peak; vLLM vs HF log-prob gap 0.001). Full SFT of 0.6B with Adam does not fit
+  there; never use that config for results.
 - **Redoing one step.** Delete its output file(s) (names in `lrsft/pipeline.py`), then run
   `./run_all.sh --only <step>` (e.g. `--only eval__full_ep8`). Changing a config value does not
   invalidate finished steps by itself.
