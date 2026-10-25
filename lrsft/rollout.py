@@ -25,6 +25,8 @@ def generate_vllm(model_dir, prompt_ids, n, temperature, top_p, max_tokens, seed
     # The engine core runs in a child process; with "fork" it dies if CUDA was touched in this process
     # first (seen on a Turing GPU). "spawn" is safe everywhere.
     os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+    # FlashInfer's top-k/top-p sampler is JIT-compiled with nvcc, which pip-only installs lack.
+    os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")
     from vllm import LLM, SamplingParams
 
     max_prompt = max(len(p) for p in prompt_ids)

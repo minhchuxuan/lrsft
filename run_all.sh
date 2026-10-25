@@ -21,6 +21,7 @@ export FLASHINFER_WORKSPACE_BASE=${FLASHINFER_WORKSPACE_BASE:-$XDG_CACHE_HOME/fl
 export CUDA_CACHE_PATH=${CUDA_CACHE_PATH:-$XDG_CACHE_HOME/nv}
 export MPLCONFIGDIR=${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}
 export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
+export VLLM_USE_FLASHINFER_SAMPLER=${VLLM_USE_FLASHINFER_SAMPLER:-0}  # its JIT needs nvcc (no CUDA toolkit)
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 # export LRSFT_WORK=/big/disk/lrsft            # optional: put models/checkpoints/rollouts elsewhere (~45 GB)

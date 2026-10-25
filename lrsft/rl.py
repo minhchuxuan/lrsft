@@ -13,6 +13,7 @@ each update (cheap at 0.6B), so frozen layers are synced too and stay consistent
 """
 
 import argparse
+import os
 import shutil
 import time
 
@@ -92,6 +93,7 @@ def main():
     if out.exists():  # the snapshot may already be deleted after its eval (disk budget)
         print(f"rl {args.name}: already done")
         return
+    os.environ.setdefault("VLLM_USE_FLASHINFER_SAMPLER", "0")  # needs nvcc to JIT; see rollout.py
     from datasets import Dataset
     from trl import GRPOConfig, GRPOTrainer
 
