@@ -14,6 +14,7 @@ export XDG_CACHE_HOME=${XDG_CACHE_HOME:-$PWD/.cache}
 export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$XDG_CACHE_HOME/triton}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$XDG_CACHE_HOME/inductor}
+export FLASHINFER_WORKSPACE_BASE=${FLASHINFER_WORKSPACE_BASE:-$XDG_CACHE_HOME/flashinfer_base}  # ignores XDG
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 # export LRSFT_WORK=/big/disk/lrsft            # optional: put models/checkpoints/rollouts elsewhere (~45 GB)
