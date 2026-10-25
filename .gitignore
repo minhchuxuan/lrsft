@@ -9,3 +9,4 @@ outputs*/
 logs*/
 results_*/
 .DS_Store
+env.local.sh

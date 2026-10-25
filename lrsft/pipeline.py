@@ -4,9 +4,11 @@
   python -m lrsft.pipeline --config configs/default.yaml --dry-run      # show plan + status
 
 Each step declares its output files; a step whose outputs exist is skipped, so re-running the same
-command resumes (SFT and RL also resume from their own Trainer checkpoints). A failing step is
-retried once, then the pipeline moves on; later steps whose inputs are missing are skipped.
+command resumes (RL also resumes from its own Trainer checkpoints). A failing step is retried once,
+then the pipeline moves on; later steps whose inputs are missing are skipped.
 Each step runs in its own process so vLLM and HF never compete for GPU memory.
+Disk: model snapshots are deleted once every step that reads them is done (disk.* in the config),
+and the pipeline stops before a step if free space falls below disk.min_free_gb.
 Status: results/pipeline_status.json, logs: <logs>/<step>.log.
 """
 
@@ -14,6 +16,7 @@ import argparse
 import fcntl
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -31,11 +34,12 @@ REPO = Path(__file__).resolve().parent.parent
 class Step:
     name: str
     stage: str
-    cmd: Callable[[], list[str]]          # built lazily: some args (R) only exist after earlier steps
+    cmd: Callable[[], list[str]] | None   # built lazily: some args (R) only exist after earlier steps
     outputs: list[Path] = field(default_factory=list)
     inputs: list[Path] = field(default_factory=list)
     gpu: bool = True
     skip_if: Callable[[], str | None] | None = None  # checked at run time; returns a reason to skip
+    fn: Callable[[], None] | None = None  # in-process housekeeping step (cleanup) instead of a command
 
     def done(self) -> bool:
         return bool(self.outputs) and all(p.exists() for p in self.outputs)
@@ -74,12 +78,30 @@ def build_steps(cfg, paths: Paths, cfg_args: list[str]) -> list[Step]:
         steps.append(Step(f"report__{stage}", stage, lambda: [sys.executable, str(REPO / "plot.py")] + cfg_args,
                           [], [], gpu=False))
 
+    def cleanup(ck, stage, after):
+        """Delete a model snapshot once the steps that read it have their outputs (disk budget)."""
+        marker = paths.work / "cleaned" / ck
+
+        def run():
+            shutil.rmtree(paths.ckpt(ck), ignore_errors=True)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("deleted after its consumers finished\n")
+
+        steps.append(Step(f"cleanup__{ck}", stage, None, [marker], list(after), gpu=False, fn=run))
+
     def rl(init, layers_arg, name, stage) -> Step:
+        # Done = the result JSON; the snapshot itself may be deleted after its eval.
         step = add(f"rl__{name}", stage, "lrsft.rl",
                    lambda: ["--init", init, "--layers", layers_arg(), "--name", name],
-                   [paths.result("rl", name), model_cfg(f"rl__{name}")], [model_cfg(init), paths.layers])
+                   [paths.result("rl", name)], [model_cfg(init), paths.layers])
         evaluate(f"rl__{name}", stage, diag=False)
+        if cfg.disk.get("delete_rl_snapshots"):
+            cleanup(f"rl__{name}", stage, [paths.result("eval", f"rl__{name}")])
         return step
+
+    def sft_consumers(ck):
+        extra = [paths.results / "verify_lr.json"] if ck.startswith("lr_") else []
+        return [paths.result(k, ck) for k in ("probe", "eval", "diag")] + extra
 
     # ---- A: layer ranking at theta_0, SFT, re-ranking, pre-RL diagnostics
     add("prep", "A", "lrsft.data", [], [data_done], [], gpu=False)
@@ -102,14 +124,27 @@ def build_steps(cfg, paths: Paths, cfg_args: list[str]) -> list[Step]:
             evaluate(f"{kind}_ep{e}", "A")
     report("A")
 
+    deep = f"full_ep{max(epochs)}"
+    drop_sft = bool(cfg.disk.get("delete_sft_snapshots"))
+    if drop_sft:  # SFT depths that no RL run starts from are only needed for part A
+        for e in epochs:
+            for kind in ("full", "lr"):
+                ck = f"{kind}_ep{e}"
+                if e not in cfg.rl.depths and ck != deep:
+                    cleanup(ck, "A", sft_consumers(ck))
+
     # ---- B: GRPO on R only, same R and config for both rows, deepest SFT first
     for d in cfg.rl.depths:
         for kind in ("full", "lr"):
             rl(f"{kind}_ep{d}", R, f"{kind}_ep{d}__R", "B")
+        if drop_sft:
+            for kind in ("full", "lr"):
+                ck = f"{kind}_ep{d}"
+                if ck != deep:  # the deepest full-SFT snapshot is still needed by the extras
+                    cleanup(ck, "B", sft_consumers(ck) + [paths.result("rl", f"{ck}__R")])
     report("B")
 
     # ---- extras: controls at the deepest full-SFT checkpoint, and a full-parameter baseline
-    deep = f"full_ep{max(epochs)}"
     ex = cfg.extras
     if ex.random_R:
         rl(deep, lambda: ",".join(map(str, read_json(paths.layers)["R_random"])), f"{deep}__Rrand", "extras")
@@ -125,8 +160,21 @@ def build_steps(cfg, paths: Paths, cfg_args: list[str]) -> list[Step]:
         rl(deep, lambda: "all", f"{deep}__all", "extras")
     if ex.rl_from_base:
         rl("base", R, "base__R", "extras")
+    if drop_sft:
+        extra_runs = [n for n, on in ((f"{deep}__Rrand", ex.random_R), (f"{deep}__Rre", ex.reselected_R),
+                                      (f"{deep}__all", ex.full_param)) if on]
+        after = sft_consumers(deep) + [paths.result("rl", f"{deep}__R")] + [paths.result("rl", n) for n in extra_runs]
+        # R' may be skipped (R' == R); then its result never appears, so don't wait for it
+        cleanup(deep, "extras", [a for a in after if not a.name.startswith(f"{deep}__Rre")])
     report("extras")
     return steps
+
+
+def free_gb(path: Path) -> float:
+    path = Path(path)
+    while not path.exists():
+        path = path.parent
+    return shutil.disk_usage(path).free / 2**30
 
 
 def run_step(step: Step, log_dir: Path, retries: int) -> tuple[str, float]:
@@ -178,6 +226,7 @@ def main():
     status_path = paths.results / "pipeline_status.json"
     status = read_json(status_path) if status_path.exists() else {}
     t_all = time.time()
+    min_free, min_free_home = cfg.disk.get("min_free_gb", 0), cfg.disk.get("min_free_home_gb", 0)
     for s in selected:
         if s.done():
             print(f"[pipeline] {s.name}: done, skip", flush=True)
@@ -187,6 +236,22 @@ def main():
             print(f"[pipeline] {s.name}: inputs missing {missing}, skip", flush=True)
             status[s.name] = {"state": "blocked", "missing": missing}
             write_json(status_path, status)
+            continue
+        low = [(p, free_gb(p), lim) for p, lim in ((paths.work, min_free), (Path.home(), min_free_home))
+               if lim and free_gb(p) < lim]
+        if low:
+            msg = ", ".join(f"{p}: {f:.1f} GB free < {lim} GB" for p, f, lim in low)
+            print(f"[pipeline] stopping before {s.name}: low disk ({msg})", flush=True)
+            status["_stopped"] = {"state": "low_disk", "before": s.name, "detail": msg,
+                                  "time": time.strftime("%F %T")}
+            write_json(status_path, status)
+            raise SystemExit(3)
+        status.pop("_stopped", None)
+        if s.fn is not None:
+            s.fn()
+            status[s.name] = {"state": "ok", "seconds": 0.0, "gpu": False, "finished": time.strftime("%F %T")}
+            write_json(status_path, status)
+            print(f"[pipeline] {s.name}: ok", flush=True)
             continue
         reason = s.skip_if() if s.skip_if else None
         if reason:

@@ -7,6 +7,9 @@
 # In the background:  tmux new -d -s lrsft ./run_all.sh     or     nohup ./run_all.sh >/dev/null 2>&1 &
 set -uo pipefail
 cd "$(dirname "$0")"
+# Machine-specific exports (TMPDIR, cache dirs, VENV, ...) go in env.local.sh (gitignored).
+# shellcheck disable=SC1091
+[ -f env.local.sh ] && source env.local.sh
 
 export HF_HOME=${HF_HOME:-$PWD/.hf_cache}      # model + dataset cache
 # compile caches (vLLM / torch.compile, Triton kernels, Inductor, matplotlib) stay inside the repo
@@ -15,6 +18,9 @@ export VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT:-$XDG_CACHE_HOME/vllm}
 export TRITON_CACHE_DIR=${TRITON_CACHE_DIR:-$XDG_CACHE_HOME/triton}
 export TORCHINDUCTOR_CACHE_DIR=${TORCHINDUCTOR_CACHE_DIR:-$XDG_CACHE_HOME/inductor}
 export FLASHINFER_WORKSPACE_BASE=${FLASHINFER_WORKSPACE_BASE:-$XDG_CACHE_HOME/flashinfer_base}  # ignores XDG
+export CUDA_CACHE_PATH=${CUDA_CACHE_PATH:-$XDG_CACHE_HOME/nv}
+export MPLCONFIGDIR=${MPLCONFIGDIR:-$XDG_CACHE_HOME/matplotlib}
+export VLLM_NO_USAGE_STATS=1 DO_NOT_TRACK=1
 export TOKENIZERS_PARALLELISM=false
 export PYTHONUNBUFFERED=1
 # export LRSFT_WORK=/big/disk/lrsft            # optional: put models/checkpoints/rollouts elsewhere (~45 GB)

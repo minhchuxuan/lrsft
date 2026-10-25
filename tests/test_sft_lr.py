@@ -93,9 +93,13 @@ def test_tiny_pipeline_end_to_end(tmp_path, qwen_tokenizer):
     status = json.loads((tmp_path / "r" / "pipeline_status.json").read_text())
     failed = {k: v for k, v in status.items() if v["state"] == "failed"}
     assert not failed, failed
-    # anything not "ok" must be the R' control being skipped because R' == R (and its eval)
+    # anything not "ok" must be the R' control being skipped because R' == R (its eval/cleanup wait)
     other = {k for k, v in status.items() if v["state"] != "ok"}
-    assert other <= {"rl__full_ep2__Rre", "eval__rl__full_ep2__Rre"}, other
+    assert all("__Rre" in k for k in other), other
+    # disk budget: RL snapshots are deleted after their eval, Trainer run dirs after their run
+    assert not (tmp_path / "w" / "models" / "rl__full_ep2__R").exists()
+    assert (tmp_path / "w" / "cleaned" / "rl__full_ep2__R").exists()
+    assert not any((tmp_path / "w" / "runs").glob("*")) if (tmp_path / "w" / "runs").exists() else True
     assert (tmp_path / "r" / "rl" / "full_ep2__R.json").exists() and (tmp_path / "r" / "rl" / "lr_ep2__R.json").exists()
     assert (tmp_path / "r" / "figures" / "fig_a3_layer_ranking.png").exists()
     assert json.loads((tmp_path / "r" / "verify_lr.json").read_text())["ok"]

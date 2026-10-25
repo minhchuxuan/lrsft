@@ -42,12 +42,18 @@ python -m lrsft.pipeline --config configs/default.yaml --dry-run    # plan: done
 python plot.py --config configs/default.yaml    # tables + figures from whatever exists so far
 ```
 
-- **Idempotent.** Every step declares its output files and is skipped when they exist. SFT and
-  RL also resume from their own Trainer checkpoints. A failing step is retried once; the pipeline
+- **Idempotent.** Every step declares its output files and is skipped when they exist. RL-on-R runs
+  also resume from their own Trainer checkpoints; SFT does not by default (see Disk). A failing step is retried once; the pipeline
   then continues with the steps that do not depend on it. A lock file stops a second pipeline from
   starting on the same `results/` dir.
 - **One process per step**, so vLLM (sampling) and HF (training/probing) never share GPU memory
   except inside GRPO, where TRL colocates them on purpose.
+- **Disk.** Footprint is kept to ≈25 GB including the ≈9 GB environment: SFT resume checkpoints are
+  off (`sft.save_steps: null`; each would be fp32 + Adam ≈7 GB, twice while rotating), Trainer run
+  dirs are deleted when a run ends, RL snapshots are deleted once evaluated, and SFT snapshots once
+  their probes, evals and RL runs are done (`disk.*`). The pipeline stops before a step when the work
+  volume has < 15 GB free or the home filesystem < 1 GB. Machine-specific exports (TMPDIR, cache
+  dirs) go in `env.local.sh`, which `run_all.sh` sources.
 - **Caches.** `HF_HOME` defaults to `./.hf_cache`; set it before `run_all.sh` to reuse an existing
   cache. vLLM / Triton / Inductor compile caches go to `./.cache`. `VENV=/path/to/venv` (both
   scripts) and `UV_INSTALL_DIR`, `UV_CACHE_DIR`, `UV_PYTHON_INSTALL_DIR` (setup.sh) keep the install
@@ -137,6 +143,13 @@ versions (TRL 1.16.0 `grpo_trainer.py`, `vllm_generation.py`, `sft_trainer.py`; 
   (0.6B, cheap); tied weights are yielded once. Frozen layers are therefore always consistent.
 - **Reward.** Last `\boxed{}` of the completion vs the gold answer with math-verify (both wrapped
   in `$…$`, default normalisation). Same function for probes, GRPO and eval.
+- **Which layers can be R.** Layers 0, 1, 2 and 27 are excluded (`select.exclude_layers`). On a
+  first, small probe of the real base model (14 prompt groups), layer 2 had about twice the gradient
+  of any other layer under grad norm, Fisher and relative grad, and layer 27 (second by grad norm)
+  feeds the LM head directly; both
+  would make "reserve the RL layers" mostly about one outlier block or the output head. R is the
+  top-2 of the remaining 24 layers. The full 28-layer ranking is still recorded and plotted, and the
+  random-R and R′ controls use the same exclusion.
 - **Layer probe = the GRPO gradient at ratio 1.** Per prompt group, the token-mean DAPO loss
   −Σᵢ Aᵢ Σₜ log π(oᵢₜ) / Σ|oᵢ| (TRL's advantage formula, truncated completions masked) is
   back-propagated once; grad_norm = ‖mean of group gradients‖ per layer, plus the group-level

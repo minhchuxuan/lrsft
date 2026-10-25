@@ -1,0 +1,8 @@
+# The run on the H100 box (tucnv-cl), on top of default.yaml. The shared volume has room now, so keep
+# SFT resume checkpoints (robust to a crash overnight) and keep every model snapshot for later analysis.
+#   CONFIGS="configs/default.yaml configs/h100.yaml" ./run_all.sh
+sft:
+  save_steps: 500
+disk:
+  delete_sft_snapshots: false
+  delete_rl_snapshots: false

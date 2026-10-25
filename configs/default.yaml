@@ -45,7 +45,10 @@ probe:                         # A1 / A3 layer ranking
 select:
   k: 2
   metric: grad_norm            # grad_norm | fisher | snr | rel_grad
-  exclude_layers: []
+  # Layer 2 is a gradient outlier (~2x any other layer by grad norm / Fisher / rel_grad on a first
+  # probe) and layer 27 feeds the LM head directly; R is picked among the rest. The full 28-layer
+  # ranking is still recorded and plotted.
+  exclude_layers: [0, 1, 2, 27]
   override: null               # e.g. [13, 15] to force R
 
 sft:
@@ -58,7 +61,8 @@ sft:
   weight_decay: 0.0
   max_grad_norm: 1.0
   logging_steps: 10
-  save_steps: 200              # resume checkpoints (fp32 + optimizer, only the latest is kept)
+  save_steps: null             # resume checkpoints are fp32 + Adam (~7 GB, x2 while rotating): off to
+                               # save disk; a crash restarts that SFT run. Set e.g. 500 to enable.
 
 eval:                          # MATH-500
   n: 16
@@ -93,6 +97,13 @@ rl:                            # B: GRPO + DAPO tricks
   vllm_gpu_memory_utilization: 0.45
   is_mode: token_truncate      # vLLM/HF mismatch correction (TIS), ratio clipped at 3
   save_every_rounds: 10
+
+disk:                          # shared volume: keep the footprint ~25 GB (env ~9 GB included)
+  min_free_gb: 15              # stop before a step if the work volume has less free space
+  min_free_home_gb: 1          # ... or the home filesystem (caches/TMPDIR must not land there)
+  delete_run_dirs: true        # drop Trainer resume checkpoints once a run has finished
+  delete_rl_snapshots: true    # drop RL snapshots once they are evaluated
+  delete_sft_snapshots: true   # drop SFT snapshots once probes, evals and RL runs from them are done
 
 extras:                        # at the deepest full-SFT checkpoint
   random_R: true

@@ -16,6 +16,8 @@ data:
 gen:
   backend: hf
   score_workers: 1
+select:
+  exclude_layers: []           # only 4 layers here
 probe:
   num_samples: 4
   batch_prompts: 3

@@ -4,11 +4,13 @@
   python -m lrsft.sft --config ... --mode lr --layers 12,14
 
 Saves bf16 snapshots <work>/models/{full,lr}_ep{E} at every E in sft.save_epochs (constant LR after
-warmup, so "depth" = number of epochs, not a point on a decay schedule). HF Trainer checkpoints in
-<work>/runs/sft_<mode> make the run resumable.
+warmup, so "depth" = number of epochs, not a point on a decay schedule). With sft.save_steps set, HF
+Trainer checkpoints (fp32 weights + Adam, ~7 GB each) in <work>/runs/sft_<mode> make the run
+resumable; with save_steps: null (default, to save disk) a crash restarts this SFT run.
 """
 
 import argparse
+import shutil
 import time
 from pathlib import Path
 
@@ -91,8 +93,8 @@ def build_trainer(cfg, paths: Paths, mode: str, layers, model=None, train_datase
         completion_only_loss=True,  # loss on the trace + <|im_end|> only
         train_sampling_strategy="group_by_length",
         logging_steps=s.logging_steps,
-        save_strategy="steps",
-        save_steps=s.save_steps,
+        save_strategy="steps" if s.get("save_steps") else "no",
+        save_steps=s.get("save_steps") or 500,
         save_total_limit=1,
         seed=cfg.seed,
         data_seed=cfg.seed,
@@ -144,6 +146,8 @@ def main():
     missing = [str(t) for t in targets if not is_model_dir(t)]
     if missing:
         raise RuntimeError(f"missing epoch snapshots: {missing} (resumed past them? rerun with a fresh run dir)")
+    if cfg.disk.get("delete_run_dirs"):
+        shutil.rmtree(paths.trainer_dir(f"sft_{args.mode}"), ignore_errors=True)
     write_json(out, {
         "mode": args.mode, "layers": layers, "trainable_params": trainable, "total_params": count_params(model),
         "seconds": time.time() - t0, "resumed": resume, "metrics": train_out.metrics,

@@ -13,7 +13,6 @@ probe:
   num_batches: 2
 sft:
   save_epochs: [1, 2]
-  save_steps: 10
 eval:
   n: 4
   ks: [1, 2, 4]
@@ -21,10 +20,8 @@ eval:
   entropy_samples: 32
 rl:
   depths: [2]
-  rounds: 3
-  prompts_per_round: 16
-  grad_accum: 8          # 16 prompts x 8 = 128 rollouts / round, 8 x 8 = 64 per update -> 2 updates
-  save_every_rounds: 2
+  rounds: 2              # real-size rounds (64 prompts x 8), so the timing extrapolates
+  save_every_rounds: 1   # exercises resume-checkpoint saving and deletion
 extras:
   random_R: false
   reselected_R: false

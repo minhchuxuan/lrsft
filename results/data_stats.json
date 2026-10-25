@@ -1,0 +1,18 @@
+{
+ "sft_candidates": 49693,
+ "sft_dropped_too_long": 10031,
+ "sft_samples": 15000,
+ "sft_tokens_total": 39071406,
+ "sft_tokens_mean": 2604.7604,
+ "sft_tokens_max": 4096,
+ "rl_prompts": 5582,
+ "probe_pool": 768,
+ "probe_pool_levels": {
+  "1": 58,
+  "2": 133,
+  "3": 180,
+  "4": 177,
+  "5": 220
+ },
+ "eval_prompts": 500
+}

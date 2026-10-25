@@ -13,6 +13,7 @@ each update (cheap at 0.6B), so frozen layers are synced too and stay consistent
 """
 
 import argparse
+import shutil
 import time
 
 import torch
@@ -21,7 +22,6 @@ from transformers import TrainerCallback
 from .common import (
     count_params,
     encode_prompt,
-    is_model_dir,
     load_model,
     load_tokenizer,
     parse_layers,
@@ -89,7 +89,7 @@ def main():
     paths = Paths(cfg)
     out = paths.result("rl", args.name)
     final = paths.ckpt(f"rl__{args.name}")
-    if out.exists() and is_model_dir(final):
+    if out.exists():  # the snapshot may already be deleted after its eval (disk budget)
         print(f"rl {args.name}: already done")
         return
     from datasets import Dataset
@@ -152,8 +152,9 @@ def main():
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_steps=1,
-        save_strategy="steps",
-        save_steps=r.save_every_rounds * updates_per_round,
+        # Resume checkpoints only for R-only runs (~2.7 GB); full-parameter ones would be ~7 GB each.
+        save_strategy="no" if full or not r.save_every_rounds else "steps",
+        save_steps=(r.save_every_rounds or 1) * updates_per_round,
         save_total_limit=1,
         seed=cfg.seed,
         report_to="none",
@@ -186,6 +187,8 @@ def main():
     if changed:
         raise RuntimeError(f"frozen parameters changed during RL: {changed[:5]}")
     save_snapshot(trainer.model, tok, final, snapshot_dtype(cfg))
+    if cfg.disk.get("delete_run_dirs"):
+        shutil.rmtree(run_dir, ignore_errors=True)
 
     hist = [h for h in trainer.state.log_history if "reward" in h]
     tail = hist[-max(1, len(hist) // 5):]
