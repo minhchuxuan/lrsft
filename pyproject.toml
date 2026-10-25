@@ -1,0 +1,36 @@
+[project]
+name = "lrsft"
+version = "0.1.0"
+description = "Layer-Reserved SFT (LR-SFT) prototype: reserve RL-critical layers before SFT, then RL only on them."
+requires-python = ">=3.11,<3.13"
+# Pins were checked against each other on 2026-10-25 (see README "Stack").
+# torch and vllm are NOT listed here: setup.sh installs them with the right CUDA flavour
+# (vllm 0.31.0 hard-pins torch==2.13.0). On a Mac the dev extra pulls the CPU torch wheel.
+dependencies = [
+    "transformers==5.17.0",   # vllm 0.31.0 needs <5.18
+    "trl==1.16.0",            # supports vllm <=0.31.0
+    "accelerate==1.15.0",
+    "datasets==5.1.0",
+    "math-verify==0.9.0",
+    "latex2sympy2_extended==1.11.0",
+    "antlr4-python3-runtime==4.13.2",
+    "safetensors>=0.8.0",
+    "numpy",
+    "pandas",
+    "pyyaml",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = ["torch==2.13.0", "pytest"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lrsft"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: end-to-end tiny pipeline (a few minutes on CPU)"]

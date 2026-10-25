@@ -1,0 +1,13 @@
+# Layer on top of default.yaml when time is short (~14 H100-h for A + B + extras):
+#   --config configs/default.yaml --config configs/fast.yaml
+data:
+  sft_num_samples: 10000
+  probe_pool_size: 384
+eval:
+  n: 8
+  ks: [1, 2, 4, 8]
+rl:
+  depths: [8, 1]
+  rounds: 40
+extras:
+  reselected_R: false

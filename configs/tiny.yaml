@@ -1,0 +1,53 @@
+# CPU smoke test (Mac): random 4-layer Qwen3 with the real tokenizer, synthetic arithmetic data,
+# HF generate instead of vLLM, random-but-deterministic rewards. Exercises every stage in minutes.
+#   --config configs/default.yaml --config configs/tiny.yaml
+paths:
+  work: outputs_tiny
+  results: results_tiny
+  logs: logs_tiny
+model:
+  tiny: {hidden_size: 64, intermediate_size: 128, num_layers: 4, num_heads: 4, num_kv_heads: 2}
+train:
+  bf16: false
+  use_cpu: true
+data:
+  synthetic: {sft: 64, rl: 48, eval: 12}
+  probe_pool_size: 16
+gen:
+  backend: hf
+  score_workers: 1
+probe:
+  num_samples: 4
+  batch_prompts: 3
+  num_batches: 2
+  micro_batch_size: 2
+sft:
+  save_epochs: [1, 2]
+  lr: 1.0e-3
+  warmup: 0
+  per_device_batch_size: 8
+  grad_accum: 1
+  logging_steps: 2
+  save_steps: 5
+eval:
+  n: 4
+  ks: [1, 2, 4]
+  max_tokens: 12
+  entropy_samples: 6
+  cka_samples: 6
+  cka_tokens: 128
+rl:
+  depths: [2]
+  rounds: 2
+  prompts_per_round: 4
+  num_generations: 4
+  per_device_batch_size: 4
+  grad_accum: 2
+  lr_subset: 1.0e-3
+  lr_full: 1.0e-3
+  max_completion_tokens: 12
+  mask_truncated: false        # the random tiny model never emits a stop token
+  use_vllm: false
+  save_every_rounds: 1
+debug:
+  fake_reward: true

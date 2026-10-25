@@ -1,0 +1,31 @@
+# 15-25 min end-to-end check on the GPU box with the real model, vLLM and TRL colocate, before the
+# real run. Separate output dirs, so it never mixes with real results (the HF download cache is shared).
+#   CONFIGS="configs/default.yaml configs/gpu_smoke.yaml" ./run_all.sh
+paths:
+  work: outputs_smoke
+  results: results_smoke
+  logs: logs_smoke
+data:
+  sft_num_samples: 512
+  probe_pool_size: 64
+probe:
+  batch_prompts: 8
+  num_batches: 2
+sft:
+  save_epochs: [1, 2]
+  save_steps: 10
+eval:
+  n: 4
+  ks: [1, 2, 4]
+  limit: 64
+  entropy_samples: 32
+rl:
+  depths: [2]
+  rounds: 3
+  prompts_per_round: 16
+  grad_accum: 8          # 16 prompts x 8 = 128 rollouts / round, 8 x 8 = 64 per update -> 2 updates
+  save_every_rounds: 2
+extras:
+  random_R: false
+  reselected_R: false
+  full_param: true       # checks the memory difference R-only vs all params
