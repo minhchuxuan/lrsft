@@ -81,7 +81,13 @@ def checkpoint_table(paths, cfg, R):
         if dg:
             row.update(entropy=dg["entropy"])
             if R:
-                row.update(cka_R=float(np.mean([dg["cka_input_vs_base"][i] for i in R])),
+                # input_layernorm output (what R's attention reads); the raw residual is ~1.0 everywhere
+                # because a few massive-activation tokens/channels dominate it
+                key = "cka_normed_vs_base" if "cka_normed_vs_base" in dg else "cka_input_vs_base"
+                row.update(cka_R=float(np.mean([dg[key][i] for i in R])),
+                           cka_R_raw=float(np.mean([dg["cka_input_vs_base"][i] for i in R])),
+                           cka_R_robust=float(np.mean([dg[k][i] for i in R])) if (k := "cka_robust_vs_base") in dg
+                           else None,
                            drift_R=float(np.mean([dg["rel_drift"][i] for i in R])),
                            drift_other=float(np.mean([d for i, d in enumerate(dg["rel_drift"]) if i not in R])))
         if pro:
@@ -209,7 +215,7 @@ def fig_a4_reserved(ck, out):
     if ck.empty or "cka_R" not in ck:
         return
     fig, axes = plt.subplots(1, 2, figsize=(8, 3.3))
-    lines_vs_depth(axes[0], ck, "cka_R", "CKA of R's input vs θ₀", "linear CKA")
+    lines_vs_depth(axes[0], ck, "cka_R", "CKA of R's normed input vs θ₀", "linear CKA")
     lines_vs_depth(axes[1], ck, "drift_R", "Weight drift of R", "‖W − W₀‖ / ‖W₀‖")
     axes[0].legend(loc="best", fontsize=8)
     fig.tight_layout()

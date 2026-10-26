@@ -2,7 +2,10 @@
 
   entropy   : mean next-token entropy on the checkpoint's own MATH-500 samples (from rollout --task eval)
   cka       : linear CKA between the inputs of every decoder layer at this checkpoint and at the base,
-              on the same token sequences (MATH-500 prompt + reference solution)
+              on the same token sequences (MATH-500 prompt + reference solution), three ways:
+              raw residual (cka_input_vs_base; dominated by massive activations, ~1.0 everywhere),
+              after the layer's input_layernorm, i.e. what its attention reads (cka_normed_vs_base),
+              and raw without the base model's outlier tokens/channels (cka_robust_vs_base)
   weights   : per-layer weight norm and relative drift ||W - W0|| / ||W0||
 
 -> results/diag/<ckpt>.json
@@ -14,7 +17,7 @@ import random
 import numpy as np
 import torch
 
-from .common import END_OF_TURN, device, layer_of, load_model, load_tokenizer, read_jsonl, set_seed, write_json
+from .common import END_OF_TURN, device, layer_of, load_model, load_tokenizer, read_json, read_jsonl, set_seed, write_json
 from .config import Paths, add_config_args, config_from_args
 from .metrics import linear_cka
 from .scoring import autocast_ctx, pad_batch, token_logprobs
@@ -22,15 +25,21 @@ from .scoring import autocast_ctx, pad_batch, token_logprobs
 
 @torch.no_grad()
 def layer_inputs(model, seqs, dev, bf16, token_idx):
-    """Inputs of each decoder layer at the chosen (sequence, position) pairs -> list of [N, d] tensors."""
-    captured = {}
+    """Residual-stream input and input_layernorm output of each decoder layer at the chosen
+    (sequence, position) pairs -> (raw, normed), each a list of [N, d] tensors."""
+    captured, captured_n = {}, {}
     hooks = []
     for i, layer in enumerate(model.model.layers):
         def hook(mod, args, kwargs, i=i):
             h = args[0] if args else kwargs["hidden_states"]
             captured[i] = h.detach().float()
+
+        def hook_norm(mod, args, out, i=i):
+            captured_n[i] = out.detach().float()
         hooks.append(layer.register_forward_pre_hook(hook, with_kwargs=True))
-    feats = {i: [] for i in range(len(model.model.layers))}
+        hooks.append(layer.input_layernorm.register_forward_hook(hook_norm))
+    n = len(model.model.layers)
+    feats, feats_n = {i: [] for i in range(n)}, {i: [] for i in range(n)}
     try:
         for s, ids in enumerate(seqs):
             pos = [p for (si, p) in token_idx if si == s]
@@ -39,12 +48,35 @@ def layer_inputs(model, seqs, dev, bf16, token_idx):
             x = torch.tensor([ids], device=dev)
             with autocast_ctx(dev, bf16):
                 model.model(input_ids=x)
-            for i, h in captured.items():
-                feats[i].append(h[0, pos].cpu())
+            for i in range(n):
+                feats[i].append(captured[i][0, pos].cpu())
+                feats_n[i].append(captured_n[i][0, pos].cpu())
     finally:
         for h in hooks:
             h.remove()
-    return [torch.cat(feats[i]) for i in sorted(feats)]
+    return [torch.cat(feats[i]) for i in range(n)], [torch.cat(feats_n[i]) for i in range(n)]
+
+
+def outlier_masks(x0, factor=10.0):
+    """Tokens / channels of the base representation with massive activations (> factor x median)."""
+    norms = x0.norm(dim=1)
+    keep_tok = norms <= factor * norms.median()
+    mag = x0[keep_tok].abs().mean(0)
+    keep_dim = mag <= factor * mag.median()
+    return keep_tok, keep_dim
+
+
+def cka_report(feats, feats0, feats_n, feats0_n) -> dict:
+    out = {"cka_input_vs_base": [], "cka_normed_vs_base": [], "cka_robust_vs_base": [],
+           "base_outlier_tokens": [], "base_outlier_channels": []}
+    for x, x0, xn, x0n in zip(feats, feats0, feats_n, feats0_n):
+        keep_tok, keep_dim = outlier_masks(x0)
+        out["cka_input_vs_base"].append(linear_cka(x, x0))
+        out["cka_normed_vs_base"].append(linear_cka(xn, x0n))
+        out["cka_robust_vs_base"].append(linear_cka(x[keep_tok][:, keep_dim], x0[keep_tok][:, keep_dim]))
+        out["base_outlier_tokens"].append(int((~keep_tok).sum()))
+        out["base_outlier_channels"].append(int((~keep_dim).sum()))
+    return out
 
 
 @torch.no_grad()
@@ -83,15 +115,23 @@ def weight_stats(model, base_sd):
 def main():
     parser = add_config_args(argparse.ArgumentParser(description=__doc__))
     parser.add_argument("--ckpt", required=True)
+    parser.add_argument("--cka-only", action="store_true",
+                        help="recompute the CKA fields of an existing diag JSON (no entropy pass)")
+    parser.add_argument("--device", default=None, help="cpu or cuda (default: cuda if available)")
+    parser.add_argument("--threads", type=int, default=0, help="torch CPU threads (0 = torch default)")
     args = parser.parse_args()
     cfg = config_from_args(args)
     paths = Paths(cfg)
     out = paths.result("diag", args.ckpt)
-    if out.exists():
+    if args.threads:
+        torch.set_num_threads(args.threads)
+    if out.exists() and not args.cka_only:
         print(f"diag {args.ckpt}: already done")
         return
+    if args.cka_only and not out.exists():
+        raise SystemExit(f"--cka-only needs an existing {out}")
     set_seed(cfg.seed)
-    dev = device()
+    dev = torch.device(args.device) if args.device else device()
     bf16 = dev.type == "cuda" and cfg.train.bf16
     tok = load_tokenizer(paths.ckpt(args.ckpt))
     kw = dict(dtype=torch.float32, attn_implementation=cfg.model.attn_implementation, device_=dev)
@@ -104,20 +144,27 @@ def main():
 
     # One model on the GPU at a time (fits small debug GPUs); the base weights wait on the CPU.
     base = load_model(paths.ckpt("base"), **kw).eval()
-    feats0 = layer_inputs(base, seqs, dev, bf16, token_idx)
+    feats0, feats0_n = layer_inputs(base, seqs, dev, bf16, token_idx)
     base_sd = {k: v.detach().cpu() for k, v in base.state_dict().items()}
     del base
     if dev.type == "cuda":
         torch.cuda.empty_cache()
     model = load_model(paths.ckpt(args.ckpt), **kw).eval()
-    feats = layer_inputs(model, seqs, dev, bf16, token_idx)
-    cka = [linear_cka(a, b) for a, b in zip(feats, feats0)]
-    eval_rows = read_jsonl(paths.rollouts(args.ckpt, "eval"))
-    ent, n_ent = mean_entropy(model, eval_rows, tok, dev, bf16, cfg.eval.entropy_samples)
+    feats, feats_n = layer_inputs(model, seqs, dev, bf16, token_idx)
+    cka = cka_report(feats, feats0, feats_n, feats0_n)
 
-    write_json(out, {"ckpt": args.ckpt, "entropy": ent, "entropy_tokens": n_ent, "cka_input_vs_base": cka,
-                     "cka_tokens": len(token_idx), **weight_stats(model, base_sd)})
-    print(f"diag {args.ckpt}: entropy={ent:.3f} cka(min)={min(cka):.3f}")
+    if args.cka_only:
+        result = read_json(out)
+        result.update(cka, cka_tokens=len(token_idx))
+    else:
+        eval_rows = read_jsonl(paths.rollouts(args.ckpt, "eval"))
+        ent, n_ent = mean_entropy(model, eval_rows, tok, dev, bf16, cfg.eval.entropy_samples)
+        result = {"ckpt": args.ckpt, "entropy": ent, "entropy_tokens": n_ent, **cka,
+                  "cka_tokens": len(token_idx), **weight_stats(model, base_sd)}
+    write_json(out, result)
+    print(f"diag {args.ckpt}: entropy={result['entropy']:.3f} cka raw/normed/robust (min) = "
+          f"{min(cka['cka_input_vs_base']):.3f}/{min(cka['cka_normed_vs_base']):.3f}/"
+          f"{min(cka['cka_robust_vs_base']):.3f}")
 
 
 if __name__ == "__main__":
