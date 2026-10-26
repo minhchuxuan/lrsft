@@ -105,6 +105,15 @@ disk:                          # shared volume: keep the footprint ~25 GB (env ~
   delete_rl_snapshots: true    # drop RL snapshots once they are evaluated
   delete_sft_snapshots: true   # drop SFT snapshots once probes, evals and RL runs from them are done
 
+rerun:                         # lrsft.rl_rerun: lr sweep for GRPO on R, then part B again in this order
+  sweep_lrs: [2.0e-5, 5.0e-5]
+  sweep_rounds: 8
+  sweep_init: full_ep8
+  rise_threshold: 0.01         # last-3 vs first-2 round mean reward
+  rounds: 40
+  order: [full_ep8__R, lr_ep8__R, full_ep1__R, lr_ep1__R, full_ep8__Rrand, full_ep3__R, lr_ep3__R,
+          full_ep8__Rre, full_ep8__all]
+
 extras:                        # at the deepest full-SFT checkpoint
   random_R: true
   reselected_R: true

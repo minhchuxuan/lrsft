@@ -69,6 +69,11 @@ python plot.py --config configs/default.yaml    # tables + figures from whatever
   Qwen3-0.6B: vLLM sampling, the layer probe, diagnostics and one GRPO-on-R round with vLLM
   colocated (5.2 GB peak; vLLM vs HF log-prob gap 0.001). Full SFT of 0.6B with Adam does not fit
   there; never use that config for results.
+- **Second pass of part B (lr sweep).** With `rl.lr_subset=5e-6` the first GRPO-on-R run did not
+  learn (reward and MATH-500 flat, clip ratio ~0). `MODULE=lrsft.rl_rerun ./run_all.sh` sweeps
+  `rerun.sweep_lrs` for `rerun.sweep_rounds` rounds from `rerun.sweep_init`, picks the lr by the rule
+  in `lrsft/rl_rerun.py` (`results/lr_sweep.json`), writes `configs/rl_rerun.yaml` and runs the B
+  runs in `rerun.order` with `rerun.rounds` rounds. The 5e-6 results are kept in `results/rl_lr5e-6/`.
 - **Redoing one step.** Delete its output file(s) (names in `lrsft/pipeline.py`), then run
   `./run_all.sh --only <step>` (e.g. `--only eval__full_ep8`). Changing a config value does not
   invalidate finished steps by itself.

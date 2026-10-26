@@ -7,9 +7,13 @@ pass them through unchanged.
 import argparse
 import copy
 import os
+import re
 from pathlib import Path
 
 import yaml
+
+
+_NUMBER = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
 
 
 class Cfg(dict):
@@ -41,7 +45,11 @@ def apply_override(cfg: dict, assignment: str) -> None:
     parts = key.strip().split(".")
     for p in parts[:-1]:
         node = node.setdefault(p, {})
-    node[parts[-1]] = yaml.safe_load(raw)
+    value = yaml.safe_load(raw)
+    # PyYAML (YAML 1.1) reads "2e-05" as a string; numbers written without a dot must still be numbers
+    if isinstance(value, str) and _NUMBER.fullmatch(value.strip()):
+        value = float(value)
+    node[parts[-1]] = value
 
 
 def load_config(paths, overrides=()) -> Cfg:

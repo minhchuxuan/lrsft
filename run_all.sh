@@ -35,8 +35,12 @@ CONFIG_ARGS=()
 for c in ${CONFIGS:-configs/default.yaml}; do CONFIG_ARGS+=(--config "$c"); done
 
 {
-  echo "== $(date '+%F %T') run_all: configs=${CONFIGS:-configs/default.yaml} stages=${STAGES:-A,B,extras} args=$*"
+  echo "== $(date '+%F %T') run_all: module=${MODULE:-lrsft.pipeline} configs=${CONFIGS:-configs/default.yaml} stages=${STAGES:-A,B,extras} args=$*"
   nvidia-smi --query-gpu=name,memory.used,memory.total,driver_version --format=csv 2>/dev/null || true
-  python -m lrsft.pipeline "${CONFIG_ARGS[@]}" --stages "${STAGES:-A,B,extras}" "$@"
+  if [ "${MODULE:-lrsft.pipeline}" = lrsft.pipeline ]; then
+    python -m lrsft.pipeline "${CONFIG_ARGS[@]}" --stages "${STAGES:-A,B,extras}" "$@"
+  else  # e.g. MODULE=lrsft.rl_rerun (lr sweep + second pass of part B)
+    python -m "$MODULE" "${CONFIG_ARGS[@]}" "$@"
+  fi
   echo "== $(date '+%F %T') run_all finished (exit $?)"
 } 2>&1 | tee -a "$LOG"

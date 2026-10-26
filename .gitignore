@@ -10,3 +10,4 @@ logs*/
 results_*/
 .DS_Store
 env.local.sh
+configs/rl_rerun.yaml

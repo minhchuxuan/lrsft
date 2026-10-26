@@ -51,5 +51,10 @@ rl:
   mask_truncated: false        # the random tiny model never emits a stop token
   use_vllm: false
   save_every_rounds: 1
+rerun:
+  sweep_init: full_ep2
+  sweep_rounds: 3
+  rounds: 2
+  order: [full_ep2__R, lr_ep2__R, full_ep2__Rrand, full_ep2__Rre, full_ep2__all]
 debug:
   fake_reward: true
