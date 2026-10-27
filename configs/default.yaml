@@ -97,6 +97,10 @@ rl:                            # B: GRPO + DAPO tricks
   vllm_gpu_memory_utilization: 0.45
   is_mode: token_truncate      # vLLM/HF mismatch correction (TIS), ratio clipped at 3
   save_every_rounds: 10
+  train_file: null             # default <work>/data/rl_train.jsonl; lrsft.rl_fixed passes its pre-filtered list
+  shuffle: true                # false: prompts in file order (the list is already ordered)
+  drift_every_rounds: 10       # bf16-changed share and coherence of the trainable weights vs init
+  drift_rounds: [1, 5]         # ... also after these rounds
 
 disk:                          # shared volume: keep the footprint ~25 GB (env ~9 GB included)
   min_free_gb: 15              # stop before a step if the work volume has less free space
@@ -125,6 +129,18 @@ nomask:                        # lrsft.rl_nomask: part B again with mask_truncat
   est_hours_R: 4.3             # measured: 3.8 h of GRPO + 0.5 h eval, until this pass measures its own
   est_factor_all: 1.25         # full-parameter run vs an R-only run, until measured
   early_check_rounds: 5
+
+fix:                           # lrsft.rl_fixed with configs/rl_fix.yaml: ep8 pair after the audit
+  results_dir: results/rl_fix  # results of this pass (paths.results for its rl / eval steps)
+  suffix: _fix                 # run names <run>_fix: snapshots, rollouts, logs never overwrite older runs
+  prefilter_init: full_ep8     # pre-filter policy (RL sampling: rl.temperature, top_p 1, rl.max_completion_tokens)
+  prefilter_new_prompts: 1280  # RL-set prompts sampled fresh (fixed seed), on top of reused probe groups
+  reuse_probe: true            # reuse <init>__probe groups whose prompt is in the RL set (same sampling)
+  order: [full_ep8__R, lr_ep8__R, full_ep8__all]
+  deadline_utc: "2026-10-28 04:00"   # do not start a run that would end later (11:00 VN Wed)
+  est_hours: 4.2               # measured no-mask run incl. eval, until this pass measures its own
+  early_check_rounds: 5
+  retries: 1
 
 extras:                        # at the deepest full-SFT checkpoint
   random_R: true

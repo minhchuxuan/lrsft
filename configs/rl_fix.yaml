@@ -1,0 +1,11 @@
+# Fixed part-B rerun after the audit (lrsft_audit.md), driven by lrsft.rl_fixed:
+#   MODULE=lrsft.rl_fixed CONFIGS="configs/default.yaml configs/h100.yaml configs/rl_fix.yaml" ./run_all.sh
+# Same as the no-mask pass (lr 5e-5 on R, 40 rounds, mask off) except:
+rl:
+  mask_truncated: false
+  lr_subset: 5.0e-5
+  lr_full: 5.0e-6      # 1e-6 sat below the bf16 rounding floor: ~12% of weights ever changed (F2)
+  rounds: 40
+  grad_accum: 64       # 8 x 64 = all 512 rollouts in one on-policy optimizer step per round (F1)
+  warmup_rounds: 0     # 40 steps only; the old 4-step warmup ran step 1 at lr 0 (F7)
+  shuffle: false       # pre-filtered prompts (1-7 of 8 correct), same order for every arm

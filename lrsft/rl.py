@@ -9,10 +9,16 @@ Dynamic sampling is not available in TRL; dead groups are logged instead (frac_r
 Only parameters with requires_grad reach the optimizer; TRL pushes every parameter to vLLM after
 each update (cheap at 0.6B), so frozen layers are synced too and stay consistent.
 
--> <work>/models/rl__<name> (bf16), results/rl/<name>.json, results/rl/<name>_log.jsonl
+Every rl.drift_every_rounds rounds (and at rl.drift_rounds) the drift of the trainable weights from
+init is logged: the share of elements whose bf16 value changed (what vLLM and eval see) and the coherence
+mean|dw| / sum(lr) (1 = every Adam step in the same direction; a pure random walk gives ~0.8/sqrt(steps)).
+
+-> <work>/models/rl__<name> (bf16), results/rl/<name>.json, results/rl/<name>_log.jsonl, _drift.jsonl
 """
 
 import argparse
+import json
+import math
 import os
 import shutil
 import time
@@ -67,6 +73,63 @@ class MemoryCallback(TrainerCallback):
                 "mem_train_peak_gb": (peak - self.baseline) / gb, "mem_device_peak_gb": self.device_peak / gb}
 
 
+class DriftLog(TrainerCallback):
+    """Drift of the trainable weights from init (audit F1/F2), per group: all trainable parameters and the
+    decoder layers only (embeddings get sparse updates, which would dilute the full-parameter numbers)."""
+
+    def __init__(self, model, path, every, rounds, updates_per_round, lr, warmup_steps):
+        # Captured before trainer.train(), i.e. before a resume checkpoint is loaded: this is the init.
+        self.model = model  # trained in place by the trainer (single process, no wrapper)
+        self.init = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.path, self.rounds, self.upr = path, set(rounds), updates_per_round
+        self.lr, self.warmup = lr, warmup_steps
+        self.every = max(1, int(every))
+        self.last = None
+
+    def lr_sum(self, steps):
+        w = self.warmup
+        return self.lr * sum(min(1.0, s / w) if w else 1.0 for s in range(steps))
+
+    @torch.no_grad()
+    def measure(self, model, step):
+        groups = {"trainable": {"n": 0, "changed": 0, "abs_dw": 0.0, "abs_w": 0.0},
+                  "layers": {"n": 0, "changed": 0, "abs_dw": 0.0, "abs_w": 0.0}}
+        for n, p in model.named_parameters():
+            if n not in self.init:
+                continue
+            w0, w = self.init[n].float(), p.detach().float()
+            stats = (w.numel(), int((w.to(torch.bfloat16) != w0.to(torch.bfloat16)).sum()),
+                     float((w - w0).abs().sum()), float(w0.abs().sum()))
+            for g in ("trainable", "layers") if ".layers." in f".{n}" else ("trainable",):
+                for k, v in zip(("n", "changed", "abs_dw", "abs_w"), stats):
+                    groups[g][k] += v
+        lr_sum = self.lr_sum(step)
+        rec = {"step": step, "round": step // self.upr, "lr_sum": lr_sum,
+               "random_walk_coherence": 0.8 / math.sqrt(step) if step else None}
+        for g, s in groups.items():
+            if s["n"]:
+                rec[g] = {"n": s["n"], "frac_bf16_changed": s["changed"] / s["n"],
+                          "mean_abs_dw": s["abs_dw"] / s["n"], "mean_abs_w": s["abs_w"] / s["n"],
+                          "coherence": s["abs_dw"] / s["n"] / lr_sum if lr_sum else None}
+        return rec
+
+    def on_step_end(self, args, state, control, **kw):
+        step = state.global_step
+        rnd, rem = divmod(step, self.upr)
+        if rem or not (rnd in self.rounds or rnd % self.every == 0 or step == state.max_steps):
+            return
+        self.log(self.measure(self.model, step))
+
+    def log(self, rec):
+        self.last = rec
+        with open(self.path, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        t = rec["trainable"]
+        print(f"drift round {rec['round']}: bf16 changed {t['frac_bf16_changed']:.3f}, mean|dw| "
+              f"{t['mean_abs_dw']:.2e}, coherence {t['coherence'] or 0:.3f} (random walk ~"
+              f"{rec['random_walk_coherence']:.3f})", flush=True)
+
+
 def make_reward(counter: dict, fake: bool):
     def math_reward(completions, answer, completion_ids=None, **kwargs):
         counter["rollouts"] += len(completions)
@@ -109,7 +172,8 @@ def main():
         train_only_layers(model, layers)
     trainable = count_params(model, trainable_only=True)
 
-    rows = read_jsonl(paths.data / "rl_train.jsonl")
+    # rl.train_file: a pre-ordered prompt list (lrsft.rl_fixed), read in order when rl.shuffle is false
+    rows = read_jsonl(r.get("train_file") or paths.data / "rl_train.jsonl")
     ds = Dataset.from_list([{"prompt": x["prompt"], "answer": x["answer"]} for x in rows])
     max_prompt = max(len(encode_prompt(tok, x["prompt"])) for x in rows)
 
@@ -158,19 +222,22 @@ def main():
         save_strategy="no" if full or not r.save_every_rounds else "steps",
         save_steps=(r.save_every_rounds or 1) * updates_per_round,
         save_total_limit=1,
+        shuffle_dataset=bool(r.get("shuffle", True)),
         seed=cfg.seed,
         report_to="none",
     )
     counter = {"rollouts": 0, "rollout_tokens": 0}
     mem = MemoryCallback()
     (paths.results / "rl").mkdir(parents=True, exist_ok=True)
+    drift = DriftLog(model, paths.results / "rl" / f"{args.name}_drift.jsonl", r.get("drift_every_rounds", 10),
+                     r.get("drift_rounds", []), updates_per_round, gargs.learning_rate, gargs.warmup_steps)
     trainer = GRPOTrainer(
         model=model,
         reward_funcs=make_reward(counter, bool(cfg.debug.get("fake_reward"))),
         args=gargs,
         train_dataset=ds,
         processing_class=tok,
-        callbacks=[mem, JsonlLog(paths.results / "rl" / f"{args.name}_log.jsonl")],
+        callbacks=[mem, drift, JsonlLog(paths.results / "rl" / f"{args.name}_log.jsonl")],
     )
     n_opt = sum(p.numel() for g in trainer.create_optimizer().param_groups for p in g["params"])
     assert n_opt == trainable, (n_opt, trainable)  # the optimizer only sees the reserved layers
@@ -197,7 +264,10 @@ def main():
     write_json(out, {
         "name": args.name, "init": args.init, "layers": args.layers, "trainable_params": trainable,
         "total_params": count_params(model), "rounds": r.rounds, "updates_per_round": updates_per_round,
-        "lr": gargs.learning_rate, "seconds": seconds, "resumed": resume, "frozen_unchanged": True,
+        "lr": gargs.learning_rate, "grad_accum": r.grad_accum, "warmup_steps": gargs.warmup_steps,
+        "mask_truncated": r.mask_truncated, "train_file": str(r.get("train_file") or "rl_train.jsonl"),
+        "shuffle": gargs.shuffle_dataset, "drift_final": drift.last,
+        "seconds": seconds, "resumed": resume, "frozen_unchanged": True,
         "rollouts": counter["rollouts"], "rollout_tokens": counter["rollout_tokens"],
         "reward_first": hist[0]["reward"] if hist else None,
         "reward_last20pct": sum(h["reward"] for h in tail) / len(tail) if tail else None,
