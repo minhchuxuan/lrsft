@@ -79,8 +79,9 @@ class DriftLog(TrainerCallback):
 
     def __init__(self, model, path, every, rounds, updates_per_round, lr, warmup_steps):
         # Captured before trainer.train(), i.e. before a resume checkpoint is loaded: this is the init.
+        # Kept on the CPU (the trainer moves the model to the GPU later); compared tensor by tensor.
         self.model = model  # trained in place by the trainer (single process, no wrapper)
-        self.init = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.init = {n: p.detach().to("cpu", copy=True) for n, p in model.named_parameters() if p.requires_grad}
         self.path, self.rounds, self.upr = path, set(rounds), updates_per_round
         self.lr, self.warmup = lr, warmup_steps
         self.every = max(1, int(every))
@@ -97,7 +98,8 @@ class DriftLog(TrainerCallback):
         for n, p in model.named_parameters():
             if n not in self.init:
                 continue
-            w0, w = self.init[n].float(), p.detach().float()
+            w = p.detach().float()
+            w0 = self.init[n].to(w.device, torch.float32)
             stats = (w.numel(), int((w.to(torch.bfloat16) != w0.to(torch.bfloat16)).sum()),
                      float((w - w0).abs().sum()), float(w0.abs().sum()))
             for g in ("trainable", "layers") if ".layers." in f".{n}" else ("trainable",):

@@ -135,8 +135,9 @@ def paired_delta(before: Path, after: Path) -> dict | None:
         return None
     a = {x["idx"]: np.mean(x["rewards"]) for x in read_jsonl(before)}
     b = {x["idx"]: np.mean(x["rewards"]) for x in read_jsonl(after)}
-    d = np.array([b[i] - a[i] for i in a if i in b])
-    return {"pass1_before": float(np.mean(list(a.values()))), "pass1_after": float(np.mean(list(b.values()))),
+    both = [i for i in a if i in b]
+    d = np.array([b[i] - a[i] for i in both])
+    return {"pass1_before": float(np.mean([a[i] for i in both])), "pass1_after": float(np.mean([b[i] for i in both])),
             "delta": float(d.mean()), "paired_se": float(d.std(ddof=1) / np.sqrt(len(d))), "n": int(len(d))}
 
 
