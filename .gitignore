@@ -11,3 +11,4 @@ results_*/
 .DS_Store
 env.local.sh
 configs/rl_rerun.yaml
+configs/rl_nomask.yaml

@@ -114,6 +114,18 @@ rerun:                         # lrsft.rl_rerun: lr sweep for GRPO on R, then pa
   order: [full_ep8__R, lr_ep8__R, full_ep1__R, lr_ep1__R, full_ep8__Rrand, full_ep3__R, lr_ep3__R,
           full_ep8__Rre, full_ep8__all]
 
+nomask:                        # lrsft.rl_nomask: part B again with mask_truncated=false
+  lr_subset: 5.0e-5
+  rounds: 40
+  archive_dir: rl_masked_lr5e-5
+  archive_runs: [full_ep8__R, lr_ep8__R, full_ep1__R]
+  order: [full_ep8__R, lr_ep8__R, full_ep8__all, full_ep1__R, lr_ep1__R, full_ep8__Rrand, full_ep3__R,
+          lr_ep3__R, full_ep8__Rre]
+  deadline_utc: "2026-10-28 04:00"   # do not start a run that would end later (11:00 VN Wed)
+  est_hours_R: 4.3             # measured: 3.8 h of GRPO + 0.5 h eval, until this pass measures its own
+  est_factor_all: 1.25         # full-parameter run vs an R-only run, until measured
+  early_check_rounds: 5
+
 extras:                        # at the deepest full-SFT checkpoint
   random_R: true
   reselected_R: true

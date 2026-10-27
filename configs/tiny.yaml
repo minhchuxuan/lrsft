@@ -56,5 +56,10 @@ rerun:
   sweep_rounds: 3
   rounds: 2
   order: [full_ep2__R, lr_ep2__R, full_ep2__Rrand, full_ep2__Rre, full_ep2__all]
+nomask:
+  archive_runs: [full_ep2__R, lr_ep2__R]
+  order: [full_ep2__R, lr_ep2__R, full_ep2__all, full_ep2__Rrand]
+  est_hours_R: 0.05
+  early_check_rounds: 2
 debug:
   fake_reward: true
