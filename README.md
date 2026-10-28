@@ -8,6 +8,21 @@ the output distribution.
 Scaled-down setting: **Qwen3-0.6B-Base** (28 layers) on **1× H100 80GB**. The 1.7B / 4B runs and
 the AESL arm of the proposal are future work.
 
+## Results (one seed, MATH-500 pass@1, 16 samples per problem)
+
+| | base | SFT 1 ep | SFT 3 ep | SFT 8 ep | after GRPO on R (from 8 ep) |
+|---|---|---|---|---|---|
+| Full SFT | 23.3 | 28.5 | 31.9 | 33.7 | 34.8 (+1.2 ± 0.6) |
+| LR-SFT (R = layers 9, 17 frozen) | 23.3 | 28.9 | 33.0 | 33.6 | 34.6 (+1.1 ± 0.7) |
+
+- Reserving two layers costs nothing in SFT accuracy; R stays bit-identical to θ₀.
+- Rollout entropy collapses from 2.22 to 0.23 / 0.24 nats per token in both arms.
+- With the fixed RL setup (`lrsft/rl_fixed.py`, `configs/rl_fix.yaml`: prompts pre-filtered to 1–7 correct out of 8,
+  one on-policy update per round), both arms gain the same (difference −0.1 ± 0.9, paired SE over the 500 problems).
+  At 0.6B, reserved layers do not buy extra RL headroom.
+- The first RL setup did not learn: about half of the GRPO groups were dead and full-parameter updates were below
+  bf16 rounding. Full-parameter GRPO at lr 5e-6 is still under-trained (+0.3 ± 0.5).
+
 | Step | What it does | Main output |
 |---|---|---|
 | A1 | θ₀: 8 rollouts on each of 768 fixed MATH-train prompts (all levels), keep the informative groups (not all-same reward), GRPO gradient per layer on 3 batches of 64 groups; R = top-2 | `results/probe/base.json`, `results/layers.json` |
